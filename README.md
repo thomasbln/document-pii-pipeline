@@ -7,11 +7,6 @@
 > reaches the model. German configs battle-tested; the structure is
 > language-agnostic.
 
-The document and the PII never leave your machine — only the masked text
-goes to the LLM you choose. English works out of the box via spaCy's
-built-in recognizers — the battle-tested custom recognizers are German;
-contributions welcome.
-
 ![The demo's "Detected PII" tab: a policy letter from a fictional "Example Life Insurance Co." to John Doe, with his name, date of birth, address, phone number and email highlighted in colour, and one toggle pill per detected PII type above the text.](./assets/demo-1-detected-pii.png)
 
 ## Why
@@ -20,9 +15,32 @@ Legal and insurance documents are PII by nature — names, addresses, birth
 dates, IBANs are not the exception in these texts, they are the content.
 Sending client documents verbatim to a cloud LLM is therefore off the table
 in most professional contexts, while running a capable LLM fully on-premise
-is out of reach for most small teams. This repo documents the middle path:
-OCR and PII detection run locally, and only masked text ever leaves the
-machine.
+is out of reach for most small teams.
+
+The middle path is an old idea: **encapsulate the sensitive part.** The
+document's identifying values never cross the boundary — they are swapped
+for placeholders before anything leaves the machine, and swapped back after
+the answer returns. The model reasons about `[PERSON_1]` and never learns
+who that is. What crosses the wire is a document with the same structure,
+the same numbers, the same questions — and nobody's name.
+
+```python
+# the whole round trip, as pseudocode — the real thing is a shell script:
+# examples/llm-roundtrip.sh
+spans = analyze(text)                 # POST /analyze  (local container)
+masked, mapping = mask(text, spans)   # [PERSON_1], [IBAN_CODE_1], …
+answer = ask_llm(prompt, masked)      # the ONLY step that leaves the machine
+final = restore(answer, mapping)      # placeholders → real values, locally
+```
+
+The simplicity is the point. There is no library here, no framework, no
+service to run — the analyzer is an off-the-shelf container, the masking is
+string slicing, and `mapping` is the one thing that must stay on your disk.
+
+Getting there, however, cost a handful of silent failures: configs that are
+read but ignored, a NER model whose person hits vanish between two layers,
+an OCR default that halves recall without ever erroring. Those are
+[the five traps](#the-five-traps) — the reason this repo exists.
 
 ## Prerequisites
 
@@ -152,15 +170,7 @@ doubles as a minimal masking policy:
 choose per entity type what the LLM may see — unchecked types stay in the
 text unmasked.
 
-In principle the whole round trip is these few lines — mask, send, restore:
-
-```python
-spans = analyze(text)                       # POST /analyze  (local container)
-masked, mapping = mask(text, spans)         # [PERSON_1], [IBAN_CODE_1], …
-answer = ask_llm(prompt, masked)            # the ONLY step that leaves the machine
-final = restore(answer, mapping)            # placeholders → real values, locally
-```
-
+That is the round trip sketched [at the top](#why): mask, send, restore.
 `mapping` is the one thing you must keep local — it is what turns the
 pseudonymization back into plain text. A runnable version in three acts
 (mask locally, send the masked text, re-substitute locally) is
@@ -194,15 +204,15 @@ document-pii-pipeline/
     └── generate-test-documents.md  ← prompts for building your own safe test documents
 ```
 
-The `conf/de/` directory is language-scoped on purpose. The traps and the
-structure are not German-specific — **contributions of `conf/fr/`,
-`conf/es/`, … with battle-tested configs for other languages are very
-welcome.**
+The `conf/de/` directory is language-scoped on purpose. English works out
+of the box via spaCy's built-in recognizers — the battle-tested custom
+recognizers are the German ones. The traps and the structure are not
+German-specific either: **contributions of `conf/fr/`, `conf/es/`, … with
+battle-tested configs for other languages are very welcome.**
 
 ## The five traps
 
-Everything below happened for real while putting this pipeline into
-production use. Each trap: **symptom → cause → fix**.
+Each one: **symptom → cause → fix**.
 
 ### 1. Presidio reads THREE config files via THREE env vars — a consolidated one is silently ignored
 
