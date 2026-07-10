@@ -3,44 +3,44 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 ![Data: stays local](https://img.shields.io/badge/Data-stays_local-blue)
 
-> **OCR → PII masking → LLM.** The document stays local, the PII never
-> reaches the model. German configs battle-tested; the structure is
-> language-agnostic.
-
-![The demo's "Detected PII" tab: a policy letter from a fictional "Example Life Insurance Co." to John Doe, with his name, date of birth, address, phone number and email highlighted in colour, and one toggle pill per detected PII type above the text.](./assets/demo-1-detected-pii.png)
-
 ## Why
 
 Legal and insurance documents are PII by nature — names, addresses, birth
 dates, IBANs are not the exception in these texts, they are the content.
-Sending client documents verbatim to a cloud LLM is therefore off the table
-in most professional contexts, while running a capable LLM fully on-premise
-is out of reach for most small teams.
+Sending them verbatim to a cloud LLM is off the table in most professional
+contexts; running a capable LLM fully on-premise is out of reach for most
+small teams.
 
-The middle path is an old idea: **encapsulate the sensitive part.** The
-document's identifying values never cross the boundary — they are swapped
-for placeholders before anything leaves the machine, and swapped back after
-the answer returns. The model reasons about `[PERSON_1]` and never learns
-who that is. What crosses the wire is a document with the same structure,
-the same numbers, the same questions — and nobody's name.
+The middle path is an old idea: **encapsulate the sensitive part.** OCR and
+PII detection run locally. Identifying values are swapped for numbered
+placeholders before anything leaves the machine, and swapped back after the
+answer returns. The model reasons about `[PERSON_1]` and never learns who
+that is.
 
 ```python
-# the whole round trip, as pseudocode — the real thing is a shell script:
-# examples/llm-roundtrip.sh
+# the whole round trip — the runnable version: examples/llm-roundtrip.sh
 spans = analyze(text)                 # POST /analyze  (local container)
 masked, mapping = mask(text, spans)   # [PERSON_1], [IBAN_CODE_1], …
 answer = ask_llm(prompt, masked)      # the ONLY step that leaves the machine
 final = restore(answer, mapping)      # placeholders → real values, locally
 ```
 
-The simplicity is the point. There is no library here, no framework, no
-service to run — the analyzer is an off-the-shelf container, the masking is
-string slicing, and `mapping` is the one thing that must stay on your disk.
+The simplicity is the point. There is no framework here and no service to
+build: an off-the-shelf analyzer container (Presidio), string slicing for
+the masking, browser OCR (tesseract.js) — and one mapping table that must
+stay on your disk. Use it as a blueprint for your own stack.
 
 Getting there, however, cost a handful of silent failures: configs that are
-read but ignored, a NER model whose person hits vanish between two layers,
-an OCR default that halves recall without ever erroring. Those are
-[the five traps](#the-five-traps) — the reason this repo exists.
+read but ignored, person hits that vanish between two layers, an OCR
+default that halves recall without ever erroring. Those are
+[the five traps](#the-five-traps) — the reason this repo exists. German
+configs are battle-tested; the structure is language-agnostic.
+
+![The demo's "Detected PII" tab: a policy letter from a fictional "Example Life Insurance Co." to John Doe, with his name, date of birth, address, phone number and email highlighted in colour, and one toggle pill per detected PII type above the text.](./assets/demo-1-detected-pii.png)
+
+*The demo on a sample policy letter: every detected value highlighted by
+type. The tabs follow the pipeline — OCR text → detected PII → masked →
+LLM response → re-identified.*
 
 ## Prerequisites
 
@@ -56,22 +56,17 @@ cd document-pii-pipeline
 docker compose up --build
 ```
 
-What to expect on the first run:
+On the first run: the build pulls the analyzer image plus two pinned spaCy
+models (~600 MB, once). Boot takes ~90 seconds — the analyzer loads its NLP
+models eagerly at startup; wait for **"PII detection: ready"** on the demo
+page. OCR happens in your browser (tesseract.js fetches its language data
+from a CDN on first use); the recognized text is only ever POSTed to the
+analyzer container on your own machine.
 
-- The **build runs once** and pulls the analyzer image plus the two pinned
-  spaCy models (~600 MB). Later starts reuse it.
-- The **boot takes ~90 seconds** — the analyzer loads its NLP models eagerly
-  at startup, not lazily on the first request. The demo page shows the
-  status; wait for **"PII detection: ready"**.
-- OCR happens **in your browser** (tesseract.js fetches its German and
-  English language data from a CDN on first use). The recognized text is
-  only ever POSTed to the analyzer container on your own machine.
-
-Then open **http://localhost:8080**. For an immediate result, drag a
-ready-made PDF from [examples/test-documents/](examples/test-documents/)
-onto the page — or press **Try German sample** and skip the upload
-entirely. Your own document works too: drop a photo or a PDF. To build a
-safe test document from scratch, see
+Then open **http://localhost:8080**. For an immediate result, press
+**Try German sample** — or drop a ready-made PDF from
+[examples/test-documents/](examples/test-documents/), or your own photo or
+PDF. To build a safe test document from scratch, see
 [examples/generate-test-documents.md](examples/generate-test-documents.md).
 
 Prefer the API? The analyzer speaks plain JSON:
@@ -88,23 +83,17 @@ curl -s -X POST http://localhost:8080/analyze \
 ```
 
 Full smoke tests — including the `allow_list` and the documented false
-positive — live in
-[examples/curl-examples.sh](examples/curl-examples.sh).
+positive — live in [examples/curl-examples.sh](examples/curl-examples.sh).
 
 ### Optional: the LLM step
 
 Everything above works without an LLM. Sending the masked text to a model
-needs a one-time setup — three steps:
-
-1. **Copy the template:** `cp .env.example .env`
-2. **Set your key** in `.env`: `LLM_API_KEY=...` (and `LLM_BASE_URL` /
-   `LLM_MODEL` if you are not on OpenAI — Anthropic and a local Ollama are
-   shown as alternatives in the file).
-3. **Restart the proxy:** `docker compose up -d --force-recreate caddy`
+is a one-time setup:
 
 ```bash
 cp .env.example .env
-$EDITOR .env                                    # set LLM_API_KEY
+$EDITOR .env    # set LLM_API_KEY — plus LLM_BASE_URL / LLM_MODEL if you are
+                # not on OpenAI (Anthropic and a local Ollama are shown in the file)
 docker compose up -d --force-recreate caddy
 ```
 
@@ -140,8 +129,8 @@ line breaks: see [Honest limitations](#honest-limitations). Nothing leaks —
 the masking errs toward hiding too much.)*
 
 PDFs work too — a digital PDF's text layer is extracted directly in the
-browser (skipping the OCR step entirely), while scanned PDFs are rendered
-to images and go through the same OCR.
+browser (skipping OCR entirely), while scanned PDFs are rendered to images
+and go through the same OCR.
 
 The compose stack runs two containers:
 
@@ -150,31 +139,16 @@ The compose stack runs two containers:
   (`DE_ADDRESS`, `DE_BIRTHDATE`, `EN_BIRTHDATE`); English requests
   otherwise run on the built-ins.
 - **`caddy`** — serves the static demo page *and* reverse-proxies
-  `/analyze` to the analyzer under the **same origin**
-  (`http://localhost:8080`). That is a deliberate choice, not decoration:
-  the obvious alternative — publish the analyzer's port 3000 and open the
-  demo straight from `file://` — fails on CORS (the browser blocks the
-  cross-origin POST). So the analyzer publishes no host port at all, and
-  Caddy puts demo and API behind one origin; the demo works out of the box.
+  `/analyze` to the analyzer under one origin (`http://localhost:8080`).
+  Deliberate, not decoration: opening the demo from `file://` against a
+  published analyzer port fails on CORS. So the analyzer publishes no host
+  port at all, and the demo works out of the box.
 
-The masking step is trivially simple by design — the analyzer returns
-character spans, and the client replaces them with numbered placeholders.
-What goes to the LLM is the masked text and only that; re-identification
-of the response happens locally, from a mapping table that never leaves
-your machine. The provider key never touches the browser either — the
-local Caddy attaches it server-side to `/llm/*` requests (`.env` →
-compose → Caddy). The send step needs a one-time setup — see
-[Optional: the LLM step](#optional-the-llm-step) in the Setup section;
-without it the demo ends at the masked-text tab. The demo's legend
-doubles as a minimal masking policy:
-choose per entity type what the LLM may see — unchecked types stay in the
-text unmasked.
-
-That is the round trip sketched [at the top](#why): mask, send, restore.
-`mapping` is the one thing you must keep local — it is what turns the
-pseudonymization back into plain text. A runnable version in three acts
-(mask locally, send the masked text, re-substitute locally) is
-[examples/llm-roundtrip.sh](examples/llm-roundtrip.sh).
+The masking itself is string slicing: the analyzer returns character spans,
+the client replaces them with numbered placeholders and keeps the mapping
+table local — the round trip sketched [at the top](#why). The demo's legend
+doubles as a minimal masking policy: choose per entity type what the LLM
+may see; unchecked types stay readable in the text.
 
 ![The demo's "Re-identified" tab: the model's summary and full text of the John Doe letter with the names, dates and contact details substituted back in, plus the local mapping table listing each placeholder next to its original value.](./assets/demo-3-reidentified.png)
 
@@ -205,9 +179,8 @@ document-pii-pipeline/
 ```
 
 The `conf/de/` directory is language-scoped on purpose. English works out
-of the box via spaCy's built-in recognizers — the battle-tested custom
-recognizers are the German ones. The traps and the structure are not
-German-specific either: **contributions of `conf/fr/`, `conf/es/`, … with
+of the box via spaCy's built-ins; the battle-tested custom recognizers are
+the German ones. **Contributions of `conf/fr/`, `conf/es/`, … with
 battle-tested configs for other languages are very welcome.**
 
 ## The five traps
@@ -380,36 +353,29 @@ Read this section before trusting the pipeline with anything sensitive.
 - **The regex recognizers have known false negatives.** The `DE_ADDRESS`
   pattern matches streets by their suffix (`-straße`, `-weg`, `-platz`, …).
   Suffix-less German street names — `Am Hang 3`, `Zur alten Mühle 7` — are
-  not matched. Extending the pattern is a deliberate trade-off against false
-  positives.
+  not matched: a deliberate trade-off against false positives.
 - **Over-masking happens too.** German dot-dates with a leading zero
   (e.g. `05.03.2026`) can get co-masked as `PHONE_NUMBER` at the 0.4
-  threshold edge — fail-safe (nothing leaks), but expect it on real
-  documents. Likewise, NER spans can swallow an adjacent field label —
-  even across a line break, since the model treats a newline as ordinary
-  whitespace (`John Doe\nDate` comes back as one `PERSON`). Again
-  over-masking, nothing leaks.
+  threshold edge, and NER spans can swallow an adjacent field label — even
+  across a line break (`John Doe\nDate` comes back as one `PERSON`). Both
+  fail-safe: nothing leaks, the masking errs toward hiding too much.
 - **Scores are not confidence.** spaCy NER hits arrive with a flat score of
   0.85 — a false positive (e.g. the document label `Versicherungsschein-Nummer`,
   German for "insurance policy number", tagged as `PERSON`) scores exactly
-  the same as a real name. Do not build thresholds or review queues on the
-  assumption that the score is a calibrated confidence signal; it isn't.
-  Use the request-side `allow_list` for known document labels instead (see
-  `examples/curl-examples.sh`).
+  the same as a real name. Do not build thresholds or review queues on that
+  score. Use the request-side `allow_list` for known document labels instead
+  (see `examples/curl-examples.sh`).
 - **The English path is not battle-tested.** `EN_BIRTHDATE` exists as a
-  label-anchored sibling of `DE_BIRTHDATE`, but no eval corpus stands
-  behind it yet. An `EN_ADDRESS` counterpart does not exist at all —
-  US/UK address formats are structurally harder than German street
-  suffixes; contributions welcome. The German configs have been through
-  production hardening; the English ones have not.
+  label-anchored sibling of `DE_BIRTHDATE`, but no eval corpus stands behind
+  it yet, and an `EN_ADDRESS` counterpart does not exist at all —
+  contributions welcome.
 - **The demo's language auto-detection is a simple heuristic** (umlauts plus
   stop words). Full documents detect reliably; short texts can be
   misdetected — use the manual override next to the detected language.
-- **Placeholder collisions.** Presidio does not number placeholders —
-  naive `[PERSON]` masking is ambiguous on re-substitution as soon as a
-  document mentions two names. Demo and script therefore number the
-  placeholders client-side (`[PERSON_1]`, `[PERSON_2]`, …) and keep the
-  mapping table local.
+- **Placeholder collisions.** Presidio does not number placeholders — naive
+  `[PERSON]` masking is ambiguous on re-substitution as soon as a document
+  mentions two names. Demo and script therefore number the placeholders
+  client-side (`[PERSON_1]`, `[PERSON_2]`, …) and keep the mapping local.
 
 ## Platform notes
 
