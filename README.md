@@ -3,6 +3,10 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 ![Data: stays local](https://img.shields.io/badge/Data-stays_local-blue)
 
+> **OCR → PII masking → LLM.** The document stays local, the PII never
+> reaches the model. German configs battle-tested; the structure is
+> language-agnostic.
+
 ## Why
 
 Legal and insurance documents are PII by nature — names, addresses, birth
@@ -33,8 +37,7 @@ stay on your disk. Use it as a blueprint for your own stack.
 Getting there, however, cost a handful of silent failures: configs that are
 read but ignored, person hits that vanish between two layers, an OCR
 default that halves recall without ever erroring. Those are
-[the five traps](#the-five-traps) — the reason this repo exists. German
-configs are battle-tested; the structure is language-agnostic.
+[the five traps](#the-five-traps) — the reason this repo exists.
 
 ![The demo's "Detected PII" tab: a policy letter from a fictional "Example Life Insurance Co." to John Doe, with his name, date of birth, address, phone number and email highlighted in colour, and one toggle pill per detected PII type above the text.](./assets/demo-1-detected-pii.png)
 
@@ -44,9 +47,11 @@ LLM response → re-identified.*
 
 ## Prerequisites
 
-**Docker Compose ≥ 2.24** — that is the whole list. No Python, no Node on
-your machine: everything runs inside the containers, and the spaCy models
-are baked into the image rather than downloaded at runtime.
+**Docker Compose ≥ 2.24** — that is the whole list (2.24 is where the
+`env_file: required: false` syntax landed, which keeps the stack starting
+without a `.env`). No Python, no Node on your machine: everything runs
+inside the containers, and the spaCy models are baked into the image rather
+than downloaded at runtime.
 
 ## Setup
 
@@ -68,8 +73,28 @@ Then open **http://localhost:8080**. For an immediate result, press
 [examples/test-documents/](examples/test-documents/), or your own photo or
 PDF. To build a safe test document from scratch, see
 [examples/generate-test-documents.md](examples/generate-test-documents.md).
+The demo runs without a key; the send button then reports "not configured".
 
-Prefer the API? The analyzer speaks plain JSON:
+When you are done: `docker compose down`.
+
+### The LLM step (optional, but it is the point)
+
+Sending the masked text to a model is a one-time setup:
+
+```bash
+cp .env.example .env
+$EDITOR .env    # set LLM_API_KEY — plus LLM_BASE_URL / LLM_MODEL if you are
+                # not on OpenAI (Anthropic and a local Ollama are shown in the file)
+docker compose up -d --force-recreate caddy
+```
+
+The key is attached server-side by the local proxy and never reaches the
+browser. Without a `.env` the demo still works up to the masked-text tab;
+the LLM step simply reports "not configured".
+
+### Prefer the API?
+
+The analyzer speaks plain JSON:
 
 ```bash
 # German text: "Max Mustermann lives in Berlin."
@@ -84,22 +109,6 @@ curl -s -X POST http://localhost:8080/analyze \
 
 Full smoke tests — including the `allow_list` and the documented false
 positive — live in [examples/curl-examples.sh](examples/curl-examples.sh).
-
-### Optional: the LLM step
-
-Everything above works without an LLM. Sending the masked text to a model
-is a one-time setup:
-
-```bash
-cp .env.example .env
-$EDITOR .env    # set LLM_API_KEY — plus LLM_BASE_URL / LLM_MODEL if you are
-                # not on OpenAI (Anthropic and a local Ollama are shown in the file)
-docker compose up -d --force-recreate caddy
-```
-
-The key is attached server-side by the local proxy and never reaches the
-browser. Without a `.env` the demo still works up to the masked-text tab;
-the LLM step simply reports "not configured".
 
 ## How it works
 
@@ -185,7 +194,13 @@ battle-tested configs for other languages are very welcome.**
 
 ## The five traps
 
-Each one: **symptom → cause → fix**.
+Each one: **symptom → cause → fix**. Jump to your symptom:
+
+1. [Config mounted, recognizers missing, no error](#1-presidio-reads-three-config-files-via-three-env-vars-a-consolidated-one-is-silently-ignored)
+2. [German names, zero `PERSON` hits](#2-spacys-german-models-emit-the-label-per-without-a-perperson-mapping-you-get-zero-person-hits)
+3. [`TypeError` on boot after adding recognizers](#3-type-custom-does-not-exist-the-loader-passes-yaml-fields-verbatim-into-the-constructor)
+4. [570 MB re-downloaded on every start](#4-plain-pip-install-in-the-image-lands-in-the-wrong-python-environment)
+5. [OCR recall stuck around 50%](#5-tesseractjs-defaults-to-psm-6-which-halves-recall-on-document-layouts)
 
 ### 1. Presidio reads THREE config files via THREE env vars — a consolidated one is silently ignored
 
