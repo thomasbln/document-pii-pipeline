@@ -1,0 +1,89 @@
+# Local demo entrypoint — ONE origin for both the static demo page and the
+# analyzer API, so the browser never makes a cross-origin request (no CORS).
+#
+# Log hygiene, carried over from production use: Caddy never logs request
+# bodies (by design — no body logging is configured here), so the
+# PII-bearing analyze text never reaches any log.
+:80 {
+	# Access logs keep ALL request headers out (same filter pattern as the
+	# public-deployment block below) — no key-bearing header can leak here.
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>headers delete
+			}
+		}
+	}
+
+	# static demo page
+	root * /srv/demo
+	file_server
+
+	# same-origin proxy to the analyzer (which publishes no host port)
+	reverse_proxy /analyze presidio-analyzer:3000
+
+	# key-free liveness probe — the demo polls this to show boot progress
+	reverse_proxy /health presidio-analyzer:3000
+
+	# LLM proxy — why server-side: the provider key is attached HERE, from
+	# the environment (.env → compose → caddy); it never reaches the browser.
+	# Bodies are not logged (log hygiene note above), and the header filter
+	# keeps the Authorization header out of the access logs.
+	# Without a .env, the default upstream below is unresolvable on purpose:
+	# caddy still starts, /llm/* answers 502, and the demo reports
+	# "not configured" instead of crash-looping.
+	handle /llm/* {
+		uri strip_prefix /llm
+		reverse_proxy {$LLM_BASE_URL:http://llm-not-configured.invalid} {
+			header_up Authorization "Bearer {$LLM_API_KEY}"
+			# Host must match the upstream host — required for HTTPS
+			# upstreams (TLS/SNI), otherwise the provider rejects the request
+			header_up Host {upstream_hostport}
+		}
+	}
+}
+
+# --- For public deployment ---------------------------------------------
+# Replace the :80 block above with a variant like this. A real domain gives
+# you automatic TLS, an API-key gate keeps the analyzer private, and the
+# log filter keeps the key header out of the access logs.
+#
+# pii.example.com {
+# 	log {
+# 		format filter {
+# 			wrap json
+# 			fields {
+# 				# access logs contain ALL request headers by default,
+# 				# including X-API-Key — delete them from the log
+# 				request>headers delete
+# 			}
+# 		}
+# 	}
+#
+# 	# /health stays key-free: pure liveness for monitoring, leaks nothing
+# 	@health {
+# 		method GET
+# 		path /health
+# 	}
+# 	handle @health {
+# 		reverse_proxy presidio-analyzer:3000
+# 	}
+#
+# 	# everything else (especially /analyze) requires a valid API key.
+# 	# Set PRESIDIO_API_KEY in the caddy service environment and use a
+# 	# required-variable guard ("${PRESIDIO_API_KEY:?...}") in the compose
+# 	# file so the container refuses to start without it — an empty value
+# 	# here would mean an open gate.
+# 	@authorized {
+# 		header X-API-Key {$PRESIDIO_API_KEY}
+# 	}
+# 	handle @authorized {
+# 		reverse_proxy presidio-analyzer:3000
+# 	}
+#
+# 	# no/wrong key → 401, the analyzer is never contacted
+# 	handle {
+# 		respond "Unauthorized" 401
+# 	}
+# }

@@ -1,0 +1,82 @@
+# Structure follows the image default default_recognizers.yaml (2.2.358).
+#
+# LANGUAGE TAGGING: pattern recognizers are tagged "en" in the image default.
+# If the registry lists a language the NLP engine does not provide, the
+# worker crashes at boot — tag every recognizer explicitly for the languages
+# you actually configured in nlp.yaml.
+#
+# CUSTOM-ENTRY SCHEMA (verified against a running 2.2.358 container):
+# "type: custom" does NOT exist — the registry loader passes ALL fields of a
+# type-less entry verbatim into PatternRecognizer.__init__(); a "type" field
+# is forwarded too and raises TypeError (unexpected keyword argument). Custom
+# recognizers are recognized by the ABSENCE of "type". The authoritative
+# schema is the example shipped inside the image (example_recognizers.yaml),
+# not the docs page. Custom entries: "supported_language" is SINGULAR
+# (built-ins use plural "supported_languages"), regex backslashes are
+# double-escaped in double-quoted YAML.
+supported_languages:
+  - de
+  - en
+global_regex_flags: 26   # re.IGNORECASE | re.MULTILINE | re.DOTALL
+recognizers:
+  - name: SpacyRecognizer
+    type: predefined
+  - name: EmailRecognizer
+    supported_languages:
+      - de
+      - en
+    type: predefined
+  - name: IbanRecognizer
+    supported_languages:
+      - de
+      - en
+    type: predefined
+  - name: PhoneRecognizer
+    supported_languages:
+      - de
+      - en
+    type: predefined
+  # DE_ADDRESS closes a documented NER gap: the spaCy model tags some street
+  # names, misses others, and never tags house numbers or zip codes. Kept
+  # deliberately MINIMAL — suffix-less street names ("Am Hang 3") are a
+  # documented gap; the false-positive direction is fail-safe (an over-masked
+  # company address costs nothing).
+  # German-only by design: the patterns encode German address conventions;
+  # English requests never hit this recognizer.
+  - name: "DE Address Recognizer"
+    supported_language: "de"
+    supported_entity: "DE_ADDRESS"
+    patterns:
+      # German street suffixes (-straße/-strasse/str., -weg, -allee, -platz,
+      # -gasse, -ring, -damm, -ufer) followed by a house number
+      - name: "street with number"
+        regex: "([A-ZÄÖÜ][\\wäöüß.-]*(?:straße|strasse|str\\.|weg|allee|platz|gasse|ring|damm|ufer)\\s+\\d{1,4}[a-z]?)"
+        score: 0.6
+      # five-digit German zip code followed by a capitalized city name
+      - name: "zip and city"
+        regex: "(\\b\\d{5}\\s+[A-ZÄÖÜ][\\wäöüß-]+)"
+        score: 0.6
+  # DE_BIRTHDATE is LABEL-ANCHORED: it only matches a date BEHIND a German
+  # birth-date label, so contract expiry dates and other dates in the text
+  # stay untouched. A blanket DATE_TIME entity is deliberately left out.
+  # German-only by design (see above).
+  - name: "DE Birthdate Recognizer"
+    supported_language: "de"
+    supported_entity: "DE_BIRTHDATE"
+    patterns:
+      # "Geburtsdatum" = "date of birth", "geboren am" = "born on"
+      - name: "labeled birthdate"
+        regex: "((?:Geburtsdatum|geboren\\s+am)[:\\s]*\\d{1,2}\\.\\d{1,2}\\.\\d{4})"
+        score: 0.6
+  # EN_BIRTHDATE: label-anchored like its German sibling — expiry and due
+  # dates stay untouched. Functional, NOT battle-tested (no eval corpus for
+  # EN yet). Labels are matched case-insensitively via global_regex_flags;
+  # date formats: "15 August 1985", "August 15, 1985", "08/15/1985",
+  # "15/08/1985", "1985-08-15" (month names spelled out or abbreviated).
+  - name: "EN Birthdate Recognizer"
+    supported_language: "en"
+    supported_entity: "EN_BIRTHDATE"
+    patterns:
+      - name: "labeled birthdate"
+        regex: "(\\b(?:Date\\s+of\\s+birth|DOB|born\\s+on)\\b[:\\s]*(?:\\d{1,2}\\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\.?,?\\s+\\d{4}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}/\\d{1,2}/\\d{4}|\\d{4}-\\d{2}-\\d{2}))"
+        score: 0.6

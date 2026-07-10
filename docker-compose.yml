@@ -1,0 +1,43 @@
+services:
+  presidio-analyzer:
+    build: ./presidio
+    # The image is amd64-only; this makes the emulation on ARM Macs
+    # explicit and silences the Compose platform warning.
+    platform: linux/amd64
+    # No host port on purpose: the analyzer is reachable only inside the
+    # compose network. The single way in is the caddy service below, which
+    # serves the demo and proxies /analyze on the same origin (no CORS).
+    restart: unless-stopped
+    # Real-world usage: ~960 MB with the German model (de_core_news_lg)
+    # loaded; the English model (en_core_web_md) is small by comparison.
+    # 3g bounds the analyzer with comfortable headroom for both.
+    mem_limit: 3g
+    healthcheck:
+      # python3 instead of curl — curl does not exist in the image
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3000/health')\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s   # the NLP engine loads eagerly at boot (~60-90 s), NOT lazily
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    # Optional LLM round trip: .env provides LLM_BASE_URL / LLM_API_KEY
+    # (/ LLM_MODEL for the example script) — see .env.example. The key stays
+    # server-side; caddy attaches it to /llm/* requests. Without a .env the
+    # demo works up to the masked-text tab and the LLM step reports
+    # "not configured".
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8080:80"   # demo + same-origin /analyze proxy → http://localhost:8080
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./demo:/srv/demo:ro
+    depends_on:
+      - presidio-analyzer
+    mem_limit: 256m
+    # For a public deployment (real domain, auto-TLS, API-key gate) see the
+    # commented block in caddy/Caddyfile.

@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document PII Pipeline — Demo</title>
+<!-- inline favicon (data URI): keeps the demo a single file and stops the
+     browser's automatic /favicon.ico request from 404ing in the console -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
+<!-- tesseract.js, pinned. Besides this script, the library fetches its
+     worker + WASM core from the same CDN at runtime, plus the traineddata
+     for 'deu' and 'eng' (two downloads on the first run — the browser
+     caches them in IndexedDB afterwards). -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js"></script>
+<style>
+  :root {
+    --border: #d0d4da;
+    --muted: #5f6a75;
+    --accent: #2456a4;
+    --bg-panel: #f7f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 4rem;
+    color: #1c2128;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--muted); margin: 0 0 1rem; }
+  .status { padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.9rem; margin-bottom: 1.25rem; }
+  .status.warming { background: #fdf3d7; }
+  .status.ready { background: #ddf2e0; }
+  .status.error { background: #fbdfdd; }
+  #drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    text-align: center;
+  }
+  #drop-zone.dragover { border-color: var(--accent); background: var(--bg-panel); }
+  #drop-zone p { margin: 0.4rem 0; }
+  .hint { color: var(--muted); font-size: 0.85rem; }
+  /* keep the file input in the focus order (display:none would remove it),
+     but visually hidden — the styled label is the visible control */
+  .visually-hidden {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0);
+    white-space: nowrap; border: 0;
+  }
+  .button:focus-within { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+  button, .button {
+    font: inherit;
+    padding: 0.45rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-panel);
+    cursor: pointer;
+    display: inline-block;
+  }
+  button:hover, .button:hover { border-color: var(--accent); }
+  .sample-buttons { margin-top: 0.75rem; display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+  .link-button {
+    border: none; background: none; padding: 0;
+    color: var(--accent); text-decoration: underline; cursor: pointer; font-size: 0.9rem;
+  }
+  #ocr-progress { margin-top: 1rem; }
+  .progress-track { height: 8px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  #progress-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+  #progress-label { color: var(--muted); font-size: 0.85rem; margin: 0.35rem 0 0; }
+  #language-row { margin: 1.5rem 0 0.75rem; }
+  #language-row .hint { margin-left: 0.5rem; }
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    margin: 0.9rem 0;
+    background: #fff;
+  }
+  .panel pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    background: var(--bg-panel);
+    border-radius: 6px;
+    padding: 0.75rem;
+  }
+  #error-box {
+    background: #fbdfdd;
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  #notice-box {
+    background: #fdf3d7;
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  /* all five tabs stay on one row; narrow viewports scroll horizontally,
+     with a visible thin scrollbar so the cut-off tabs are discoverable */
+  #tab-bar { display: flex; gap: 0.25rem; margin-top: 1rem; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+  #tab-bar::-webkit-scrollbar { height: 6px; }
+  #tab-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .tab {
+    color: var(--muted);
+    border-radius: 8px 8px 0 0;
+    border-bottom: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .tab.active {
+    background: #fff;
+    color: inherit;
+    font-weight: 600;
+    border-color: var(--accent);
+  }
+  .tab-panel { margin-top: 0; border-top-left-radius: 0; }
+  .low-confidence {
+    background: #e3e5e8;
+    text-decoration: underline dashed #8a939d;
+    text-underline-offset: 3px;
+    border-radius: 2px;
+  }
+  #legend { margin-bottom: 0.35rem; font-size: 0.8rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  #legend mark { padding: 0 0.35rem; }
+  .entity-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    background: #fff;
+  }
+  .entity-pill.off { opacity: 0.45; text-decoration: line-through; }
+  .entity-pill.off mark { filter: grayscale(1); }
+  /* the send form sits above the masked text it will send */
+  #llm-form {
+    margin: 0.75rem 0 1rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.9rem;
+  }
+  #llm-form > p:first-child { margin-top: 0; }
+  .llm-controls { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 0.6rem 0; }
+  .llm-controls label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  #llm-prompt-label { flex: 1; min-width: 16rem; }
+  .llm-controls input {
+    font: inherit;
+    color: inherit;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  #llm-toggle-warning { color: #a4262c; font-size: 0.85rem; }
+  .tab-panel pre.empty { color: var(--muted); font-style: italic; }
+  #mapping-area {
+    margin-top: 1rem;
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+  }
+  #mapping-list { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+  #mapping-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.2rem 0;
+    flex-wrap: wrap;
+  }
+  #mapping-list mark {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+    border-radius: 999px;
+    padding: 0.05rem 0.5rem;
+  }
+  #mapping-list .mapping-arrow { color: var(--muted); }
+  #mapping-list .mapping-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    word-break: break-word;
+  }
+  #tab-spans > .hint { margin: 0 0 0.6rem; }
+  mark[data-entity] { border-radius: 3px; padding: 0 2px; }
+  mark[data-entity="PERSON"]        { background: #ffd54f; }
+  mark[data-entity="LOCATION"]      { background: #a5d6a7; }
+  mark[data-entity="EMAIL_ADDRESS"] { background: #90caf9; }
+  mark[data-entity="PHONE_NUMBER"]  { background: #ce93d8; }
+  mark[data-entity="IBAN_CODE"]     { background: #ffab91; }
+  mark[data-entity="DE_ADDRESS"]    { background: #80cbc4; }
+  mark[data-entity="DE_BIRTHDATE"],
+  mark[data-entity="EN_BIRTHDATE"]  { background: #f48fb1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Document PII Pipeline — Demo</h1>
+  <p class="subtitle">
+    Photo → OCR (in your browser) → PII detection (local container) → masked
+    text → LLM. The document and the PII never leave your machine — only the
+    masked text goes to the LLM you choose.
+  </p>
+</header>
+
+<div id="analyzer-status" class="status warming" role="status">Checking the PII detector&hellip;</div>
+
+<section>
+  <div id="drop-zone">
+    <p><strong>Drop a document photo or PDF here</strong> or</p>
+    <label class="button">Choose a file<input type="file" id="file-input" accept="image/*,application/pdf" class="visually-hidden"></label>
+    <p class="hint">
+      German and English documents are supported — the language is detected
+      automatically. No test document at hand? Try a ready-made PDF from
+      <code>examples/test-documents/</code>, or generate your own (see
+      <code>examples/generate-test-documents.md</code>) — or skip the upload
+      entirely:
+    </p>
+    <div class="sample-buttons">
+      <button id="sample-de" type="button">Try German sample</button>
+      <button id="sample-en" type="button">Try English sample</button>
+    </div>
+  </div>
+  <div id="ocr-progress" hidden>
+    <div class="progress-track"><div id="progress-bar"></div></div>
+    <p id="progress-label">Starting OCR&hellip;</p>
+  </div>
+</section>
+
+<div id="error-box" hidden></div>
+<div id="notice-box" hidden></div>
+
+<section id="results" hidden>
+  <div id="language-row">
+    Detected language: <strong id="detected-language">–</strong>
+    <button id="language-override" type="button" class="link-button">Switch to English</button>
+    <span class="hint">(re-runs the analysis only, not the OCR)</span>
+  </div>
+  <div id="tab-bar" role="tablist">
+    <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-raw" data-tab="tab-raw">OCR text</button>
+    <button type="button" class="tab active" role="tab" aria-selected="true" aria-controls="tab-spans" data-tab="tab-spans">Detected PII</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-masked" data-tab="tab-masked">Masked</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-llm-masked" data-tab="tab-llm-masked">LLM response</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" aria-controls="tab-llm-final" data-tab="tab-llm-final">Re-identified</button>
+  </div>
+  <div id="tab-raw" class="panel tab-panel" role="tabpanel" hidden>
+    <p id="ocr-confidence-legend" class="hint" hidden>
+      Grayed words: low OCR confidence — PII inside them will NOT be
+      reliably detected.
+    </p>
+    <p id="pdf-digital-note" class="hint" hidden>
+      Digital PDF — text extracted directly, no OCR involved.
+    </p>
+    <pre id="raw-text"></pre>
+  </div>
+  <div id="tab-spans" class="panel tab-panel" role="tabpanel">
+    <div id="legend"></div>
+    <p class="hint">
+      Click a PII type to include or exclude it — anything unchecked stays
+      readable for the LLM.
+    </p>
+    <pre id="highlighted-text"></pre>
+  </div>
+  <div id="tab-masked" class="panel tab-panel" role="tabpanel" hidden>
+    <p class="hint">This is what your LLM sees.</p>
+    <p class="hint">
+      Masking is only as good as the OCR — if the raw text is garbled
+      (see first tab), PII leaks through unmasked.
+    </p>
+    <div id="llm-form">
+      <p><strong>Send the masked text to an LLM</strong></p>
+      <div class="llm-controls">
+        <label id="llm-prompt-label">Prompt
+          <input id="llm-prompt" type="text" value="First give a two-sentence summary of this document. Then return the FULL document text, cleaned of obvious OCR artifacts, under the heading '--- Full text ---'. Keep every [BRACKETED_PLACEHOLDER] exactly as it is.">
+        </label>
+        <label>Model
+          <input id="llm-model" type="text" value="gpt-4o-mini">
+        </label>
+      </div>
+      <p class="hint">
+        Your prompt is sent together with the complete masked text below.
+      </p>
+      <p class="hint">
+        The masked text is ALL the provider sees — the key is attached
+        server-side by the local proxy, it never touches your browser.
+      </p>
+      <p id="llm-toggle-warning" hidden></p>
+      <button id="llm-send" type="button">Send masked text</button>
+    </div>
+    <pre id="masked-text"></pre>
+  </div>
+  <div id="tab-llm-masked" class="panel tab-panel" role="tabpanel" hidden>
+    <p class="hint">
+      Raw model output — placeholders intact, the provider never saw the
+      real values.
+    </p>
+    <pre id="llm-masked-text"></pre>
+  </div>
+  <div id="tab-llm-final" class="panel tab-panel" role="tabpanel" hidden>
+    <p class="hint">
+      Placeholders re-substituted locally from the mapping table that never
+      left this machine.
+    </p>
+    <pre id="llm-final-text"></pre>
+    <!-- appears together with the answer; cleared by resetLlmTabs() -->
+    <div id="mapping-area" hidden>
+      <p><strong>Your data — the local mapping table</strong></p>
+      <p class="hint">
+        Every masked value, restored from the table that never left this
+        machine. Values the model used in its answer are re-substituted
+        above; the rest simply never made the trip.
+      </p>
+      <ul id="mapping-list"></ul>
+    </div>
+  </div>
+</section>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+// Entities requested per language. German gets the custom recognizers from
+// presidio/conf/de/registry.yaml on top of the built-ins; English gets the
+// built-ins plus the label-anchored EN_BIRTHDATE (functional, not
+// battle-tested — see README).
+const ENTITIES = {
+  de: ['PERSON', 'LOCATION', 'EMAIL_ADDRESS', 'PHONE_NUMBER', 'IBAN_CODE', 'DE_ADDRESS', 'DE_BIRTHDATE'],
+  en: ['PERSON', 'LOCATION', 'EMAIL_ADDRESS', 'PHONE_NUMBER', 'IBAN_CODE', 'EN_BIRTHDATE'],
+};
+
+// German document labels that the NER systematically mistakes for person
+// names — "Versicherungsschein-Nummer" ("insurance policy number") is the
+// documented PERSON false positive at score 0.85. The allow_list entries
+// must match the German labels VERBATIM, which is why they stay German.
+const ALLOW_LIST = {
+  de: ['Versicherungsschein-Nummer', 'Versicherungsnehmer'],
+  en: [],
+};
+
+// German sample (Max-Mustermann-class insurance letter). It contains: a
+// policyholder name, a labeled birth date, street + zip/city, the policy
+// number label that triggers the documented false positive, phone, email,
+// a test IBAN, and a contract expiry date that must NOT be masked.
+const SAMPLE_DE = [
+  'Versicherungsnehmer: Max Mustermann',
+  'Geburtsdatum: 15.08.1985',
+  'Musterweg 15, 53113 Bonn',
+  'Versicherungsschein-Nummer: L-123456',
+  'Tel: 030 1234567, max@example.com',
+  'IBAN: DE89370400440532013000',
+  'Ablauf der Vertragslaufzeit am 28.02.2036.',
+].join('\n');
+
+// English sample (John-Doe-class claim letter, fully fictional data).
+const SAMPLE_EN = [
+  'Policyholder: John Doe',
+  'Date of birth: 15 August 1985',
+  '123 Main Street, Springfield, IL 62704',
+  'Policy number: L-123456',
+  'Phone: (217) 555-0142, john.doe@example.com',
+  'The policy expires on 28 February 2036.',
+].join('\n');
+
+const LANGUAGE_NAMES = { de: 'German (de)', en: 'English (en)' };
+
+const LLM_MASKED_EMPTY_STATE = 'Nothing sent yet — use Send in the Masked tab.';
+const LLM_FINAL_EMPTY_STATE = 'Send the masked text first — see the LLM response tab.';
+
+// Fallback when the user clears the prompt field. It asks for summary +
+// full text in one answer — the demo's point is showing what goes out and
+// what comes back. Keeping the placeholders verbatim is what makes the
+// local re-identification work at all.
+const DEFAULT_PROMPT = 'First give a two-sentence summary of this document. ' +
+  'Then return the FULL document text, cleaned of obvious OCR artifacts, ' +
+  "under the heading '--- Full text ---'. " +
+  'Keep every [BRACKETED_PLACEHOLDER] exactly as it is.';
+
+// Words below this OCR confidence are grayed in the raw-text tab — garbled
+// words are exactly where PII slips through: what the OCR mangles, no
+// recognizer will match. 60 is tesseract's usual "dubious" boundary.
+const LOW_CONFIDENCE_THRESHOLD = 60;
+
+// ---------------------------------------------------------------------------
+// Elements & state
+// ---------------------------------------------------------------------------
+
+const el = (id) => document.getElementById(id);
+const statusBox = el('analyzer-status');
+const dropZone = el('drop-zone');
+const fileInput = el('file-input');
+const progressSection = el('ocr-progress');
+const progressBar = el('progress-bar');
+const progressLabel = el('progress-label');
+const errorBox = el('error-box');
+const noticeBox = el('notice-box');
+const resultsSection = el('results');
+const detectedLanguageEl = el('detected-language');
+const overrideButton = el('language-override');
+
+let currentText = '';
+let currentLanguage = 'de';
+let currentOcrWords = null; // per-word OCR confidences; null when no OCR ran (samples)
+let currentIsDigitalPdf = false; // raw-tab note: text came from a PDF text layer
+let currentSpans = []; // unfiltered analyzer result of the current run
+let currentMapping = {}; // placeholder -> original value; never leaves this machine
+const disabledEntities = new Set(); // entity types toggled off in the legend
+let ocrWorkerPromise = null;
+
+// Run token: every new processing run takes the next id. A slow run whose
+// id is stale (OCR still finishing while the user already started another
+// document) must never render over the newer result.
+let currentRunId = 0;
+const isStaleRun = (runId) => runId !== currentRunId;
+
+// ---------------------------------------------------------------------------
+// Analyzer health poll
+// ---------------------------------------------------------------------------
+
+const HEALTH_POLL_BOOT_MS = 3000;   // while booting: react quickly
+const HEALTH_POLL_READY_MS = 30000; // once ready: keep watching, cheaply
+
+let healthWasReady = false; // once true, a failing probe means "it died", not "it boots"
+
+// Keeps polling after "ready" so a container that dies later is noticed —
+// a stale green status bar would be worse than none.
+async function pollHealth() {
+  let delay = HEALTH_POLL_BOOT_MS;
+  try {
+    const res = await fetch('/health', { cache: 'no-store' });
+    if (res.ok) {
+      statusBox.textContent = 'PII detection: ready';
+      statusBox.className = 'status ready';
+      healthWasReady = true;
+      delay = HEALTH_POLL_READY_MS;
+    } else if (healthWasReady) {
+      // It answered before, so this is not a slow boot — the container is gone.
+      statusBox.textContent = 'PII detection: stopped responding — is the container still running?';
+      statusBox.className = 'status error';
+    } else {
+      // Caddy answers 502 while the analyzer container is still booting.
+      statusBox.textContent =
+        'PII detection: warming up — the first boot takes ~90 s while the language models load…';
+      statusBox.className = 'status warming';
+    }
+  } catch {
+    statusBox.textContent = 'PII detection: unreachable — is "docker compose up" running?';
+    statusBox.className = 'status error';
+  }
+  setTimeout(pollHealth, delay);
+}
+pollHealth();
+
+// ---------------------------------------------------------------------------
+// OCR
+// ---------------------------------------------------------------------------
+
+// One worker for both languages: 'deu+eng' loads German AND English
+// traineddata and recognizes both in a single pass — so language detection
+// can happen AFTER the OCR, on the recognized text, with no second OCR run.
+function getOcrWorker() {
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = (async () => {
+      const worker = await Tesseract.createWorker('deu+eng', 1, {
+        logger: updateOcrProgress,
+      });
+      // PSM 11 (sparse text), set EXPLICITLY. tesseract.js sets no page
+      // segmentation mode at all, so the Tesseract API default PSM 6
+      // ("single uniform block") applies — not the PSM 3 (auto) that CLI
+      // tutorials suggest. On real document photos PSM 6 halved recall on
+      // the fields that matter; switching to PSM 11 took it from ~50% to
+      // 100% in a sweep over the same photos. See README, trap 5.
+      await worker.setParameters({
+        tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
+      });
+      return worker;
+    })();
+  }
+  return ocrWorkerPromise;
+}
+
+function updateOcrProgress(message) {
+  const { status, progress } = message;
+  if (typeof progress === 'number') {
+    progressBar.style.width = `${Math.round(progress * 100)}%`;
+  }
+  const label = status === 'recognizing text'
+    ? `Running OCR… ${Math.round((progress || 0) * 100)}%`
+    : `${status}…`;
+  progressLabel.textContent = label;
+  // the logger only fires mid-run, so mirror the live progress into the
+  // result tabs' processing state
+  if (status === 'recognizing text') {
+    setProcessingState(label);
+  }
+}
+
+async function handleImage(file) {
+  const runId = beginRun('ocr');
+  progressSection.hidden = false;
+  progressBar.style.width = '0%';
+  try {
+    const worker = await getOcrWorker();
+    // Request the "blocks" output too: since tesseract.js v6 only plain
+    // text is returned by default, and the per-word confidences shown in
+    // the raw-text tab live in the blocks hierarchy.
+    const { data } = await worker.recognize(file, {}, { text: true, blocks: true });
+    if (isStaleRun(runId)) return; // a newer document is already being processed
+    progressSection.hidden = true;
+    if (!data.text.trim()) {
+      setProcessingState('');
+      showError('OCR produced no text — try a sharper, better-lit photo.');
+      return;
+    }
+    const words = (data.blocks || []).flatMap((block) =>
+      (block.paragraphs || []).flatMap((paragraph) =>
+        (paragraph.lines || []).flatMap((line) => line.words || [])));
+    await startAnalysis(data.text, words, false, runId);
+  } catch (err) {
+    if (isStaleRun(runId)) return;
+    progressSection.hidden = true;
+    setProcessingState('');
+    showError(`OCR failed: ${err.message || err}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PDF handling
+// ---------------------------------------------------------------------------
+
+// Why two stages: a digital PDF carries an exact text layer — running OCR
+// on it would only ADD errors (and false confidence). So the text layer is
+// tried first; only scan-PDFs (no usable text layer) are rendered to
+// images and sent through the regular OCR pipeline.
+const PDF_TEXT_THRESHOLD = 50; // non-whitespace chars; below this the text layer counts as absent (scan)
+const MAX_PDF_PAGES = 5;       // keeps the demo snappy; a notice is shown for longer PDFs
+const PDF_RENDER_SCALE = 2;    // ~2x the CSS page size — OCR needs more pixels than screen rendering
+
+// pdf.js ships ESM-only since v4 (no classic <script> build), so it is
+// imported dynamically — pinned, and only fetched when the first PDF
+// arrives; image-only users never load it.
+const PDFJS_VERSION = '6.1.200';
+let pdfjsPromise = null;
+function loadPdfJs() {
+  if (!pdfjsPromise) {
+    pdfjsPromise = import(`https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.min.mjs`)
+      .then((pdfjs) => {
+        pdfjs.GlobalWorkerOptions.workerSrc =
+          `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+        return pdfjs;
+      });
+  }
+  return pdfjsPromise;
+}
+
+function joinPages(pageTexts) {
+  return pageTexts
+    .map((text, index) => (index === 0 ? text : `--- page ${index + 1} ---\n${text}`))
+    .join('\n');
+}
+
+// pdf.js hands out text as positioned items, not lines. Items carrying
+// hasEOL end their line — joining everything with a space instead would
+// glue separate fields together, and the NER then reads e.g.
+// "Jane Doe DOB:" as one person name. Keeping the line structure keeps
+// the spans clean.
+function extractPageText(items) {
+  const lines = [];
+  let line = [];
+  for (const item of items) {
+    if (item.str) line.push(item.str);
+    if (item.hasEOL) {
+      lines.push(line.join(' ').trim());
+      line = [];
+    }
+  }
+  if (line.length > 0) lines.push(line.join(' ').trim());
+  return lines.filter((l) => l !== '').join('\n');
+}
+
+async function handlePdf(file) {
+  const runId = beginRun('pdf');
+  progressSection.hidden = false;
+  progressBar.style.width = '0%';
+  progressLabel.textContent = 'Reading PDF…';
+  try {
+    const pdfjs = await loadPdfJs();
+    const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+    if (isStaleRun(runId)) return;
+    const pageCount = Math.min(pdf.numPages, MAX_PDF_PAGES);
+    if (pdf.numPages > MAX_PDF_PAGES) {
+      showNotice(`PDF has ${pdf.numPages} pages — processing the first ${MAX_PDF_PAGES}.`);
+    }
+
+    // Stage 1: the text layer.
+    const pageTexts = [];
+    for (let i = 1; i <= pageCount; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      pageTexts.push(extractPageText(content.items));
+    }
+    if (isStaleRun(runId)) return;
+    const textLayer = joinPages(pageTexts);
+    if (textLayer.replace(/\s/g, '').length >= PDF_TEXT_THRESHOLD) {
+      progressSection.hidden = true;
+      // digital text is exact — no OCR, no confidences
+      await startAnalysis(textLayer, null, true, runId);
+      return;
+    }
+
+    // Stage 2: scan-PDF — render each page to a canvas and OCR it.
+    const worker = await getOcrWorker();
+    const ocrTexts = [];
+    const ocrWords = [];
+    for (let i = 1; i <= pageCount; i++) {
+      progressLabel.textContent = `OCR page ${i}/${pageCount}…`;
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvas, viewport }).promise;
+      const { data } = await worker.recognize(canvas, {}, { text: true, blocks: true });
+      if (isStaleRun(runId)) return;
+      ocrTexts.push(data.text);
+      ocrWords.push(...(data.blocks || []).flatMap((block) =>
+        (block.paragraphs || []).flatMap((paragraph) =>
+          (paragraph.lines || []).flatMap((line) => line.words || []))));
+    }
+    progressSection.hidden = true;
+    const joined = joinPages(ocrTexts);
+    if (!joined.trim()) {
+      setProcessingState('');
+      showError('Neither a text layer nor OCR-readable content was found in this PDF.');
+      return;
+    }
+    await startAnalysis(joined, ocrWords, false, runId);
+  } catch (err) {
+    if (isStaleRun(runId)) return;
+    progressSection.hidden = true;
+    setProcessingState('');
+    if (err && err.name === 'PasswordException') {
+      showError('This PDF is password-protected — remove the encryption and try again.');
+    } else {
+      showError(`Could not read this PDF — it may be damaged or unsupported. (${err.message || err})`);
+    }
+  }
+}
+
+// Dispatches an uploaded/dropped file to the right pipeline.
+function handleFile(file) {
+  hideNotice();
+  if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')) {
+    handlePdf(file);
+  } else if (file.type.startsWith('image/')) {
+    handleImage(file);
+  } else {
+    showError('Please drop an image or a PDF of a document.');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Language detection
+// ---------------------------------------------------------------------------
+
+// Tiny heuristic — German umlauts/ß plus a handful of German stop words vs.
+// English stop words. Good enough for a full document; short texts can be
+// misdetected, which is what the manual override next to the result is for
+// (see README, honest limitations).
+function detectLanguage(text) {
+  const germanHints = text.match(/[äöüß]|\b(und|der|die|das|ist|mit|von|für|nicht|eine?)\b/gi) || [];
+  const englishHints = text.match(/\b(the|and|of|to|is|with|for|not|on|at)\b/gi) || [];
+  return germanHints.length >= englishHints.length ? 'de' : 'en';
+}
+
+// ---------------------------------------------------------------------------
+// Analysis
+// ---------------------------------------------------------------------------
+
+async function startAnalysis(text, ocrWords = null, isDigitalPdf = false, runId = currentRunId) {
+  if (isStaleRun(runId)) return;
+  currentText = text;
+  currentOcrWords = ocrWords;
+  currentIsDigitalPdf = isDigitalPdf;
+  currentLanguage = detectLanguage(text);
+  await analyzeAndRender(runId);
+}
+
+// runId defaults to the current run: the language override re-analyzes the
+// text of the run that is already on screen.
+async function analyzeAndRender(runId = currentRunId) {
+  clearError();
+  detectedLanguageEl.textContent = LANGUAGE_NAMES[currentLanguage];
+  overrideButton.textContent =
+    currentLanguage === 'de' ? 'Switch to English' : 'Switch to German';
+  try {
+    const spans = await requestAnalysis(currentText, currentLanguage);
+    if (isStaleRun(runId)) return; // a newer run took over while we waited
+    renderResults(spans);
+  } catch (err) {
+    if (isStaleRun(runId)) return;
+    setProcessingState(''); // failed run leaves the tabs empty, never stale
+    showError(
+      `Analysis failed: ${err.message || err} — make sure "docker compose up" ` +
+      'is running and give the first boot ~90 s.'
+    );
+  }
+}
+
+async function requestAnalysis(text, language) {
+  const body = { text, language, entities: ENTITIES[language] };
+  if (ALLOW_LIST[language].length > 0) {
+    body.allow_list = ALLOW_LIST[language];
+  }
+  // Relative URL on purpose: Caddy serves this page and proxies /analyze to
+  // the analyzer container under the SAME origin — no CORS involved.
+  const res = await fetch('/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`analyzer returned HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+// Presidio may return overlapping spans (e.g. LOCATION "Bonn" inside the
+// DE_ADDRESS "53113 Bonn"). At every contested position the higher score
+// wins — but the loser's uncontested remainder MUST stay covered, otherwise
+// the masked view would leak it. Implemented as a sweep over all span
+// boundaries: pick the best span per segment, then merge adjacent segments
+// won by the same span.
+function resolveOverlaps(spans) {
+  const boundaries = [...new Set(spans.flatMap((s) => [s.start, s.end]))].sort((a, b) => a - b);
+  const resolved = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const from = boundaries[i];
+    const to = boundaries[i + 1];
+    const winner = spans
+      .filter((s) => s.start <= from && s.end >= to)
+      .sort((a, b) => b.score - a.score)[0];
+    if (!winner) continue; // gap between spans
+    const last = resolved[resolved.length - 1];
+    if (last && last.end === from && last.entity_type === winner.entity_type && last.score === winner.score) {
+      last.end = to;
+    } else {
+      resolved.push({ entity_type: winner.entity_type, score: winner.score, start: from, end: to });
+    }
+  }
+  return resolved;
+}
+
+function escapeHtml(text) {
+  return text.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function renderHighlighted(text, spans) {
+  let html = '';
+  let position = 0;
+  for (const span of spans) {
+    html += escapeHtml(text.slice(position, span.start));
+    html += `<mark data-entity="${escapeHtml(span.entity_type)}">` +
+            `${escapeHtml(text.slice(span.start, span.end))}</mark>`;
+    position = span.end;
+  }
+  return html + escapeHtml(text.slice(position));
+}
+
+// Numbered placeholders: without numbering, two [PERSON] placeholders
+// collide and re-substitution of the LLM response is ambiguous. The same
+// original string reuses its placeholder; a new string gets the next number
+// per type. Returns the masked text plus the local mapping table.
+function maskTextNumbered(text, spans) {
+  const mapping = {};  // placeholder -> original string
+  const seen = {};     // "type:original" -> placeholder (dedupe repeats)
+  const counters = {}; // type -> highest number assigned so far
+  let masked = '';
+  let position = 0;
+  for (const span of spans) {
+    const original = text.slice(span.start, span.end);
+    const key = `${span.entity_type}:${original}`;
+    let placeholder = seen[key];
+    if (!placeholder) {
+      counters[span.entity_type] = (counters[span.entity_type] || 0) + 1;
+      placeholder = `[${span.entity_type}_${counters[span.entity_type]}]`;
+      seen[key] = placeholder;
+      mapping[placeholder] = original;
+    }
+    masked += text.slice(position, span.start) + placeholder;
+    position = span.end;
+  }
+  return { masked: masked + text.slice(position), mapping };
+}
+
+// Replace placeholders in the model's answer from the local mapping.
+// Unknown placeholders (hallucinated or belonging to a toggled-off type)
+// are left as-is — visible is better than silently wrong.
+function reidentify(text, mapping) {
+  let out = text;
+  for (const [placeholder, original] of Object.entries(mapping)) {
+    out = out.split(placeholder).join(original);
+  }
+  return out;
+}
+
+// The legend doubles as a minimal masking policy: one clickable pill per
+// PII type the analyzer found in this run (checkbox semantics, all active
+// by default). Types come from the UNFILTERED result, so a toggled-off
+// type keeps its pill and can be re-enabled. Pills are ordered by where
+// their type first appears in the text — stable and predictable, instead
+// of the analyzer's response order.
+function renderLegend() {
+  const firstSeen = new Map();
+  for (const span of [...currentSpans].sort((a, b) => a.start - b.start)) {
+    if (!firstSeen.has(span.entity_type)) firstSeen.set(span.entity_type, span.start);
+  }
+  const types = [...firstSeen.keys()];
+  if (types.length === 0) {
+    el('legend').innerHTML = '<span class="hint">No PII detected.</span>';
+    return;
+  }
+  el('legend').innerHTML = types.map((type) => {
+    const off = disabledEntities.has(type);
+    return `<button type="button" class="entity-pill${off ? ' off' : ''}" ` +
+           `data-entity-toggle="${escapeHtml(type)}" aria-pressed="${!off}">` +
+           `<mark data-entity="${escapeHtml(type)}">&nbsp;</mark>${escapeHtml(type)}</button>`;
+  }).join('');
+}
+
+// Applies the entity toggles and re-renders the spans tab and the masked
+// tab — purely client-side, no new /analyze request, no OCR. Filtering
+// happens BEFORE resolveOverlaps() on purpose: disabling a type releases
+// overlapped spans of other types underneath (e.g. the LOCATION span under
+// a DE_ADDRESS reappears when DE_ADDRESS is toggled off).
+function renderCurrent() {
+  const activeSpans = currentSpans.filter((s) => !disabledEntities.has(s.entity_type));
+  const resolved = resolveOverlaps(activeSpans);
+  el('highlighted-text').innerHTML = renderHighlighted(currentText, resolved);
+  const { masked, mapping } = maskTextNumbered(currentText, resolved);
+  el('masked-text').textContent = masked;
+  currentMapping = mapping;
+  renderLegend();
+  updateLlmToggleWarning();
+}
+
+// Raw-text tab: plain text for samples (no OCR data), and with words below
+// LOW_CONFIDENCE_THRESHOLD grayed when OCR confidences are available. Words
+// are located in the assembled text sequentially; a word that cannot be
+// found is skipped (unmarked) rather than breaking the view.
+function renderRawText(text, words) {
+  const container = el('raw-text');
+  const legend = el('ocr-confidence-legend');
+  el('pdf-digital-note').hidden = !currentIsDigitalPdf;
+  if (!words || words.length === 0) {
+    container.textContent = text;
+    legend.hidden = true;
+    return;
+  }
+  let html = '';
+  let cursor = 0;
+  for (const word of words) {
+    const index = text.indexOf(word.text, cursor);
+    if (index === -1) continue;
+    html += escapeHtml(text.slice(cursor, index));
+    html += word.confidence < LOW_CONFIDENCE_THRESHOLD
+      ? `<span class="low-confidence">${escapeHtml(word.text)}</span>`
+      : escapeHtml(word.text);
+    cursor = index + word.text.length;
+  }
+  html += escapeHtml(text.slice(cursor));
+  container.innerHTML = html;
+  legend.hidden = false;
+}
+
+// A new analysis invalidates any previous LLM round trip: both result tabs
+// fall back to their empty-state line, the mapping table disappears, and
+// the old mapping is dropped. Prompt and model fields (in the masked tab)
+// keep their values on purpose.
+function resetLlmTabs() {
+  for (const [id, emptyState] of [
+    ['llm-masked-text', LLM_MASKED_EMPTY_STATE],
+    ['llm-final-text', LLM_FINAL_EMPTY_STATE],
+  ]) {
+    const pre = el(id);
+    pre.textContent = emptyState;
+    pre.classList.add('empty');
+  }
+  el('mapping-area').hidden = true;
+  el('mapping-list').innerHTML = '';
+  currentMapping = {};
+}
+
+// Shows every placeholder of the current run next to its original value.
+// Order: types in the order they first appear in the text (the mapping is
+// built left to right, so key insertion order already carries it), and
+// within a type by placeholder number. Toggled-off types are absent from
+// the mapping — they were never masked, so there is nothing to list.
+function renderMappingList() {
+  const entries = Object.entries(currentMapping);
+  const typeOrder = new Map();
+  for (const [placeholder] of entries) {
+    const type = placeholder.replace(/^\[(.+)_\d+\]$/, '$1');
+    if (!typeOrder.has(type)) typeOrder.set(type, typeOrder.size);
+  }
+  const parsed = entries.map(([placeholder, original]) => {
+    const match = placeholder.match(/^\[(.+)_(\d+)\]$/);
+    return { placeholder, original, type: match[1], number: Number(match[2]) };
+  });
+  parsed.sort((a, b) =>
+    typeOrder.get(a.type) - typeOrder.get(b.type) || a.number - b.number);
+
+  el('mapping-list').innerHTML = parsed.map((entry) =>
+    `<li><mark data-entity="${escapeHtml(entry.type)}">${escapeHtml(entry.placeholder)}</mark>` +
+    '<span class="mapping-arrow">→</span>' +
+    `<span class="mapping-value">${escapeHtml(entry.original)}</span></li>`).join('');
+  el('mapping-area').hidden = parsed.length === 0;
+}
+
+// Writes a status line into the three result tabs while a run is active
+// ('' clears them, e.g. when a run fails — old results never come back).
+function setProcessingState(text) {
+  for (const id of ['raw-text', 'highlighted-text', 'masked-text']) {
+    el(id).textContent = text;
+  }
+}
+
+// Common entry point for EVERY new processing run (file upload, PDF,
+// sample click): wipe all stale results immediately so the user never
+// looks at the previous document's data while the new one is processed.
+// Returns the run's id — callers pass it back so a slow, superseded run
+// can bail out instead of rendering over a newer one.
+function beginRun(kind) {
+  currentRunId += 1;
+  clearError();
+  hideNotice();
+  disabledEntities.clear();
+  currentSpans = [];
+  el('legend').innerHTML = '';
+  el('ocr-confidence-legend').hidden = true;
+  el('pdf-digital-note').hidden = true;
+  resetLlmTabs();
+  updateLlmToggleWarning();
+  setProcessingState(
+    kind === 'ocr' ? 'Running OCR…'
+      : kind === 'pdf' ? 'Processing…'
+      : 'Analyzing…');
+  resultsSection.hidden = false;
+  // Uploads show their progress where their result will land.
+  if (kind !== 'sample') selectTab('tab-raw');
+  return currentRunId;
+}
+
+function renderResults(spans) {
+  currentSpans = spans;
+  disabledEntities.clear(); // every new run starts with all types active
+  resetLlmTabs();
+  renderRawText(currentText, currentOcrWords);
+  renderCurrent();
+  // Every run starts at the first tab — the tabs read as the pipeline, left
+  // to right. It is also the demo's own advice: check the OCR before
+  // trusting the masking.
+  selectTab('tab-raw');
+  resultsSection.hidden = false;
+  resultsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ---------------------------------------------------------------------------
+// LLM round trip (step 2)
+// ---------------------------------------------------------------------------
+
+// Live warning next to the send button: toggled-off entity types stay in
+// the masked text unmasked — the user should know BEFORE sending.
+function updateLlmToggleWarning() {
+  const warning = el('llm-toggle-warning');
+  const count = disabledEntities.size;
+  if (count === 0) {
+    warning.hidden = true;
+    return;
+  }
+  warning.textContent = `${count} PII type${count === 1 ? '' : 's'} switched off — ` +
+    'those real values WILL be sent to the LLM.';
+  warning.hidden = false;
+}
+
+const LLM_REQUEST_TIMEOUT_MS = 60000; // generous — local models can be slow
+
+// POSTs to the local caddy proxy, which attaches the provider key
+// server-side (see caddy/Caddyfile) — no key ever passes through here.
+async function sendToLlm() {
+  clearError();
+  const runId = currentRunId; // a new document started meanwhile → discard this answer
+  const button = el('llm-send');
+  const model = el('llm-model').value.trim() || 'gpt-4o-mini';
+  const prompt = el('llm-prompt').value.trim() || DEFAULT_PROMPT;
+  const maskedText = el('masked-text').textContent;
+  if (!maskedText) {
+    showError('Run an analysis first — there is no masked text to send.');
+    return;
+  }
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Sending…';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LLM_REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch('/llm/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: `${prompt}\n\n${maskedText}` }],
+      }),
+      signal: controller.signal,
+    });
+    if (isStaleRun(runId)) return; // answer belongs to a superseded document
+    if (res.status === 502 || res.status === 504) {
+      showError('LLM step not configured — copy .env.example to .env, set your key, restart: docker compose up');
+      return;
+    }
+    if (res.status === 401) {
+      showError('The provider rejected the key (check .env).');
+      return;
+    }
+    if (res.status === 404) {
+      showError(`Unknown model name "${model}" — check the model field; ` +
+        'it must match the provider in your .env.');
+      return;
+    }
+    if (!res.ok) {
+      showError(`LLM call failed: HTTP ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      showError('Unexpected response shape from the provider.');
+      return;
+    }
+    const llmMasked = el('llm-masked-text');
+    llmMasked.textContent = content;
+    llmMasked.classList.remove('empty');
+    const llmFinal = el('llm-final-text');
+    llmFinal.textContent = reidentify(content, currentMapping);
+    llmFinal.classList.remove('empty');
+    renderMappingList();
+    // Land on the raw model output, not the re-identified text: the user
+    // follows the pipeline one step at a time, and seeing the answer still
+    // full of placeholders is the point. Re-identifying is the last click.
+    selectTab('tab-llm-masked');
+  } catch (err) {
+    if (isStaleRun(runId)) return;
+    showError(err.name === 'AbortError'
+      ? `LLM request timed out after ${LLM_REQUEST_TIMEOUT_MS / 1000} s.`
+      : `Could not reach the local proxy — is "docker compose up" running? (${err.message || err})`);
+  } finally {
+    clearTimeout(timer);
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+// The error box sits above the tabs, so bring it into view — otherwise a
+// failure triggered from a lower tab (e.g. the LLM send button) looks like
+// "nothing happened".
+function showError(message) {
+  errorBox.textContent = message;
+  errorBox.hidden = false;
+  errorBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function clearError() {
+  errorBox.hidden = true;
+}
+
+function showNotice(message) {
+  noticeBox.textContent = message;
+  noticeBox.hidden = false;
+}
+
+function hideNotice() {
+  noticeBox.hidden = true;
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+
+// Result tabs: plain buttons toggling the hidden attribute — no framework.
+const tabButtons = [...document.querySelectorAll('#tab-bar .tab')];
+function selectTab(id) {
+  for (const button of tabButtons) {
+    const active = button.dataset.tab === id;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+    el(button.dataset.tab).hidden = !active;
+  }
+}
+tabButtons.forEach((button) =>
+  button.addEventListener('click', () => selectTab(button.dataset.tab)));
+
+// Entity pills are rebuilt with every render, so one delegated listener on
+// the legend container handles all of them.
+el('legend').addEventListener('click', (event) => {
+  const pill = event.target.closest('[data-entity-toggle]');
+  if (!pill) return;
+  const type = pill.dataset.entityToggle;
+  if (disabledEntities.has(type)) {
+    disabledEntities.delete(type);
+  } else {
+    disabledEntities.add(type);
+  }
+  renderCurrent();
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+});
+
+// Without these, a file dropped NEXT TO the drop zone triggers the browser
+// default: it navigates away from the demo and opens the file. Swallow the
+// event window-wide; only the drop zone below acts on it.
+window.addEventListener('dragover', (event) => event.preventDefault());
+window.addEventListener('drop', (event) => event.preventDefault());
+
+dropZone.addEventListener('dragover', (event) => {
+  event.preventDefault();
+  dropZone.classList.add('dragover');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (event) => {
+  event.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = event.dataTransfer.files[0];
+  if (file) {
+    handleFile(file);
+  } else {
+    showError('Please drop an image or a PDF of a document.');
+  }
+});
+
+// Sample buttons skip the OCR and feed the text straight to the analyzer.
+el('sample-de').addEventListener('click', () => startAnalysis(SAMPLE_DE, null, false, beginRun('sample')));
+el('sample-en').addEventListener('click', () => startAnalysis(SAMPLE_EN, null, false, beginRun('sample')));
+
+// Manual fallback for a misdetected language: flips de/en and re-runs the
+// analysis on the already-recognized text (no second OCR).
+overrideButton.addEventListener('click', async () => {
+  currentLanguage = currentLanguage === 'de' ? 'en' : 'de';
+  await analyzeAndRender();
+  // The raw text is unchanged — what changed are the hits, so show those
+  // instead of the run's default tab. Not on failure: the tabs are empty then.
+  if (errorBox.hidden) selectTab('tab-spans');
+});
+
+el('llm-send').addEventListener('click', sendToLlm);
+</script>
+
+</body>
+</html>

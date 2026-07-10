@@ -1,0 +1,8 @@
+# Schema reference: the image ships its own defaults under
+# /usr/bin/presidio-analyzer/presidio_analyzer/conf/default_analyzer.yaml
+supported_languages:
+  - de
+  - en   # en runs on spaCy built-ins only, no custom recognizers (see registry.yaml)
+# PhoneRecognizer scores exactly 0.4 — right at this edge. If phone numbers
+# get filtered in your setup, drop the threshold to 0.35.
+default_score_threshold: 0.4

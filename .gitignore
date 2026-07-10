@@ -1,0 +1,18 @@
+# internal — never publish
+CLAUDE.md
+docs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# node (in case tesseract.js ever gets tested locally)
+node_modules/
+
+# misc
+*.log
+.env
+# written by examples/llm-roundtrip.sh (local re-substitution table)
+mapping.txt

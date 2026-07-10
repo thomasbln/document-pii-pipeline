@@ -1,0 +1,41 @@
+nlp_engine_name: spacy
+models:
+  - lang_code: de
+    model_name: de_core_news_lg
+  # English model, pinned to the same spaCy version family (3.8.x) as the
+  # German one. EN is functional but not battle-tested — see README.
+  - lang_code: en
+    model_name: en_core_web_md
+# MANDATORY: spaCy's German models emit the label "PER" — without the
+# PER→PERSON mapping below, EVERY person hit is silently dropped (zero
+# PERSON results, no warning, no error). The mapping applies engine-wide
+# and does not hurt English (its models emit "PERSON" directly).
+ner_model_configuration:
+  model_to_presidio_entity_mapping:
+    PER: PERSON
+    PERSON: PERSON
+    LOC: LOCATION
+    LOCATION: LOCATION
+    GPE: LOCATION
+    ORG: ORGANIZATION
+  low_confidence_score_multiplier: 0.4
+  low_score_entity_names:
+    - ORG
+    - ORGANIZATION
+  # labels_to_ignore written out EXPLICITLY, copied from the image default
+  # (presidio_analyzer/conf/default.yaml @ 2.2.358) instead of relying on it.
+  # Desired behavior hangs on this list: ORGANIZATION is ignored, so company
+  # names survive the masking and the text stays readable for the LLM. That
+  # must NOT depend on an implicit default (version-drift risk).
+  labels_to_ignore:
+    - ORGANIZATION # image-default note: "Has many false positives" — load-bearing here: org names survive masking
+    - CARDINAL
+    - EVENT
+    - LANGUAGE
+    - LAW
+    - MONEY
+    - ORDINAL
+    - PERCENT
+    - PRODUCT
+    - QUANTITY
+    - WORK_OF_ART
