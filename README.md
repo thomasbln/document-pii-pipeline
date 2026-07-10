@@ -204,20 +204,9 @@ Each one: **symptom → cause → fix**. Jump to your symptom:
 
 ### 1. Presidio reads THREE config files via THREE env vars — a consolidated one is silently ignored
 
-**Symptom:** You write one clean, consolidated YAML with the analyzer
-settings, the NLP config and your custom recognizers, mount it, and the
-container boots green — but behaves as if your config didn't exist: default
-entities only, your recognizers are simply not there. No warning, no error.
-
-**Cause:** The analyzer's entrypoint reads **three separate files through
-three separate environment variables** — `ANALYZER_CONF_FILE`,
-`NLP_CONF_FILE` and `RECOGNIZER_REGISTRY_CONF_FILE`. Sections that live in
-a file not wired through exactly these variables are never read. This cost
-three full rebuild-and-boot loops before the cause was found, because
-nothing ever fails — the defaults just win silently.
-
-**Fix:** Split the configuration into three files and set all three
-variables explicitly:
+One clean, consolidated YAML boots green and is never read — the defaults
+win silently, no warning, no error. The entrypoint only reads three
+separate files through three separate env vars:
 
 ```dockerfile
 ENV ANALYZER_CONF_FILE=/app/conf/analyzer.yaml
@@ -227,17 +216,12 @@ ENV RECOGNIZER_REGISTRY_CONF_FILE=/app/conf/registry.yaml
 
 ### 2. spaCy's German models emit the label `PER` — without a `PER→PERSON` mapping you get zero person hits
 
-**Symptom:** German text containing perfectly obvious names ("Max
-Mustermann") returns **zero `PERSON` entities**. IBANs and emails are found
-(those are pattern recognizers), so the pipeline looks "mostly working" —
-which makes this trap especially treacherous.
-
-**Cause:** spaCy's German models label persons as `PER`, but Presidio
-filters results against its own entity name `PERSON`. Without an explicit
-mapping, every person hit is silently dropped between the NER model and the
-API response.
-
-**Fix:** Map the model's labels to Presidio's entity names in `nlp.yaml`:
+German text with obvious names returns zero `PERSON` entities while IBANs
+and emails still work — the pipeline looks "mostly fine", which is what
+makes this one treacherous. spaCy DE labels persons `PER`; Presidio filters
+against `PERSON` and silently drops every hit. Map the labels in `nlp.yaml`
+— and write `labels_to_ignore` out explicitly instead of trusting an image
+default that can drift between versions:
 
 ```yaml
 ner_model_configuration:
@@ -248,33 +232,20 @@ ner_model_configuration:
     ORG: ORGANIZATION
 ```
 
-While you are in this file: write `labels_to_ignore` out **explicitly**
-instead of relying on the image default. The desired behavior (e.g.
-organization names surviving the masking so the text stays readable) should
-not hinge on an implicit default that can drift between versions.
-
 ### 3. `type: custom` does not exist — the loader passes YAML fields verbatim into the constructor
 
-**Symptom:** The analyzer crashes at boot after you add custom pattern
-recognizers following the documented registry schema:
+Boot crash after adding custom recognizers per the docs page:
 
 ```
 TypeError: PatternRecognizer.__init__() got an unexpected keyword argument 'type'
 ```
 
-**Cause:** The registry loader does not consume a `type` discriminator for
-custom entries — it passes **all** YAML fields of a type-less entry verbatim
-as keyword arguments into `PatternRecognizer.__init__()`. Your `type: custom`
-field (as shown on the docs page) is forwarded too, and the constructor
-rejects it. A custom recognizer is marked by the **absence** of `type`;
-`type: predefined` is only meaningful for built-ins. The authoritative
-schema is the example file shipped *inside the image*, which differs from
-the docs page.
-
-**Fix:** Remove `type: custom`. Two further quirks of custom entries,
-confirmed against the in-image example: `supported_language` is **singular**
-(built-ins use plural `supported_languages`), and regex backslashes must be
-double-escaped in double-quoted YAML:
+The loader forwards every field of a type-less entry straight into the
+constructor — a custom recognizer is marked by the **absence** of `type`.
+Two more quirks, confirmed against the schema example shipped inside the
+image (which beats the docs page): `supported_language` is **singular** for
+custom entries, and regex backslashes are double-escaped in double-quoted
+YAML:
 
 ```yaml
 # Custom recognizer: NO "type" field — its absence is what marks it as custom.
@@ -287,28 +258,17 @@ double-escaped in double-quoted YAML:
       score: 0.6
 ```
 
-**Debugging tip that generalizes:** when a config crashes a containerized
-service at boot, don't iterate blind `docker compose up` loops. Start the
-service manually inside its own environment (here: `poetry run ...` inside
-the container) to get the real traceback, and read the schema example
-shipped in the artifact (`find / -name "*example*"` inside the container)
-before trusting the docs page.
+The tip that generalizes: don't iterate blind `docker compose up` loops —
+run the service manually inside the container for the real traceback, and
+read the schema example shipped in the artifact before trusting the docs.
 
 ### 4. Plain `pip install` in the image lands in the wrong Python environment
 
-**Symptom:** The image builds fine, but **every container start re-downloads
-the ~570 MB German model** — the boot log shows `Downloading
-de_core_news_lg...` on each and every boot, unpinned, from the network.
-
-**Cause:** The Presidio image contains **two Python environments**. A plain
-`RUN pip install ...` installs the model into `/usr/local/...`, where the
-application's environment (managed by poetry) never looks. At runtime the
-model is "missing", so it gets re-downloaded into the ephemeral container
-filesystem — again on every fresh container.
-
-**Fix:** Install through the application's own environment, pinned. This
-happens **inside the image at build time** — nothing is installed on your
-machine:
+The image builds fine, but every container start re-downloads the ~570 MB
+German model. The Presidio image contains two Python environments, and a
+plain `pip install` lands in the one the application never looks at.
+Install through the app's own environment, pinned — inside the image at
+build time, nothing touches your machine:
 
 ```dockerfile
 # in presidio/Dockerfile
@@ -316,81 +276,55 @@ RUN poetry run pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl
 ```
 
-Verification is one look at the boot log: no `Downloading...` line anymore.
+Verification: no `Downloading...` line in the boot log anymore.
 
 ### 5. tesseract.js defaults to PSM 6 — which halves recall on document layouts
 
-**Symptom:** On phone photos of real documents, OCR recall on the fields
-that matter (contract numbers, reference numbers) sits around **50%**.
-Multi-column layouts get interleaved mid-number; numbers printed in comb/box
-fields come back with inserted digits. It looks like "tesseract just isn't
-good enough" — and tempts you into a wrong architecture decision (falling
-back to a cloud vision API, defeating the point of a local pipeline).
-
-**Cause:** tesseract.js does not set a page segmentation mode at all, so the
-Tesseract **API default PSM 6 (single uniform block)** applies — *not* the
-CLI default PSM 3 (auto) that tutorials and CLI experience suggest. PSM 6
-presses multi-column, sparse document layouts into one text block; both
-miss classes above are segmentation artifacts, not character-recognition
-limits.
-
-**Fix:** Set **PSM 11 (sparse text)** explicitly:
+On phone photos of real documents, recall on the fields that matter sits
+around 50% — it looks like "tesseract just isn't good enough" and tempts
+you toward a cloud vision API. It is a segmentation artifact: tesseract.js
+applies the Tesseract **API default PSM 6** (single uniform block), not the
+CLI default PSM 3 that tutorials suggest. Set PSM 11 (sparse text)
+explicitly:
 
 ```js
 await worker.setParameters({
-  tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT, // PSM 11 — see below
+  tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT, // PSM 11
 });
 ```
 
-In a settings sweep over the same photo set, PSM 11 took the critical-field
-recall from **~50% to 100%** — including the comb-field number that was
-expected to stay broken. (Bonus finding from the same sweep: the `best`
-traineddata model scored *zero* points better than `fast` at 2.2× the
-runtime — measure, don't assume.)
-
-The general rule behind this trap: **library defaults are a measurement
-subject, not a given.** Before integrating an engine-like library, sweep the
-relevant settings against your own real data.
+In a sweep over the same photo set this took critical-field recall from
+**~50% to 100%**, comb-field numbers included. (Same sweep: the `best`
+traineddata scored zero points over `fast` at 2.2× the runtime.) The rule
+behind the trap: **library defaults are a measurement subject, not a
+given.**
 
 ## Honest limitations
 
-Read this section before trusting the pipeline with anything sensitive.
+Read this before trusting the pipeline with anything sensitive.
 
-- **A missed entity is a leak.** This pipeline performs *pseudonymization*,
-  not anonymization: every entity the NER model or the regex recognizers
-  fail to detect goes to the LLM verbatim. NER recall is never 100%. Treat
-  the masking as risk reduction, not as a guarantee — and do not call it
-  "anonymized" in a GDPR sense.
-- **OCR is the ceiling.** Tesseract is a print-OCR engine: handwritten
-  text is out of scope, and comb/box form fields fragment even printed
-  characters. On such documents PII survives unmasked — check the raw-text
-  tab (low-confidence words are grayed) before trusting the masked output.
-- **The regex recognizers have known false negatives.** The `DE_ADDRESS`
-  pattern matches streets by their suffix (`-straße`, `-weg`, `-platz`, …).
-  Suffix-less German street names — `Am Hang 3`, `Zur alten Mühle 7` — are
-  not matched: a deliberate trade-off against false positives.
-- **Over-masking happens too.** German dot-dates with a leading zero
-  (e.g. `05.03.2026`) can get co-masked as `PHONE_NUMBER` at the 0.4
-  threshold edge, and NER spans can swallow an adjacent field label — even
-  across a line break (`John Doe\nDate` comes back as one `PERSON`). Both
-  fail-safe: nothing leaks, the masking errs toward hiding too much.
-- **Scores are not confidence.** spaCy NER hits arrive with a flat score of
-  0.85 — a false positive (e.g. the document label `Versicherungsschein-Nummer`,
-  German for "insurance policy number", tagged as `PERSON`) scores exactly
-  the same as a real name. Do not build thresholds or review queues on that
-  score. Use the request-side `allow_list` for known document labels instead
-  (see `examples/curl-examples.sh`).
-- **The English path is not battle-tested.** `EN_BIRTHDATE` exists as a
-  label-anchored sibling of `DE_BIRTHDATE`, but no eval corpus stands behind
-  it yet, and an `EN_ADDRESS` counterpart does not exist at all —
-  contributions welcome.
-- **The demo's language auto-detection is a simple heuristic** (umlauts plus
-  stop words). Full documents detect reliably; short texts can be
-  misdetected — use the manual override next to the detected language.
-- **Placeholder collisions.** Presidio does not number placeholders — naive
-  `[PERSON]` masking is ambiguous on re-substitution as soon as a document
-  mentions two names. Demo and script therefore number the placeholders
-  client-side (`[PERSON_1]`, `[PERSON_2]`, …) and keep the mapping local.
+- **A missed entity is a leak.** This is *pseudonymization*, not
+  anonymization: anything the recognizers miss goes to the LLM verbatim.
+  Risk reduction, not a guarantee — do not call it "anonymized" in a GDPR
+  sense.
+- **OCR is the ceiling.** Handwriting is out of scope, comb/box fields
+  fragment even print. Check the raw-text tab (low-confidence words are
+  grayed) before trusting the masked output.
+- **Known false negatives.** `DE_ADDRESS` matches streets by suffix;
+  suffix-less names (`Am Hang 3`) pass through — a deliberate trade-off
+  against false positives.
+- **Over-masking happens too.** Leading-zero dot-dates can be co-masked as
+  `PHONE_NUMBER`, and NER spans can swallow an adjacent field label across
+  a line break. Both fail-safe: nothing leaks.
+- **Scores are not confidence.** spaCy hits arrive at a flat 0.85 — a false
+  positive scores exactly like a real name. Don't build thresholds on it;
+  use the request-side `allow_list` (see `examples/curl-examples.sh`).
+- **The English path is not battle-tested.** `EN_BIRTHDATE` has no eval
+  corpus yet; `EN_ADDRESS` does not exist — contributions welcome.
+- **Language auto-detection is a heuristic.** Short texts can misdetect —
+  use the manual override next to the detected language.
+- **Placeholder collisions.** Presidio does not number placeholders; demo
+  and script number them client-side and keep the mapping local.
 
 ## Platform notes
 
