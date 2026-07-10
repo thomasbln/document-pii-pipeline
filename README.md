@@ -4,8 +4,7 @@
 ![Data: stays local](https://img.shields.io/badge/Data-stays_local-blue)
 
 > **OCR → PII masking → LLM.** The document stays local, the PII never
-> reaches the model. German configs battle-tested; the structure is
-> language-agnostic.
+> reaches the model. Works with German and English documents.
 
 ## Why
 
@@ -37,7 +36,8 @@ stay on your disk. Use it as a blueprint for your own stack.
 Getting there, however, cost a handful of silent failures: configs that are
 read but ignored, person hits that vanish between two layers, an OCR
 default that halves recall without ever erroring. Those are
-[the five traps](#the-five-traps) — the reason this repo exists.
+[the five traps](#the-five-traps) — the reason this repo exists. German
+configs are battle-tested; the structure is language-agnostic.
 
 ![The demo's "Detected PII" tab: a policy letter from a fictional "Example Life Insurance Co." to John Doe, with his name, date of birth, address, phone number and email highlighted in colour, and one toggle pill per detected PII type above the text.](./assets/demo-1-detected-pii.png)
 
