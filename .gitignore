@@ -16,3 +16,5 @@ node_modules/
 .env
 # written by examples/llm-roundtrip.sh (local re-substitution table)
 mapping.txt
+# social-media video export lives next to the GIF but is not repo content
+assets/*.mp4
