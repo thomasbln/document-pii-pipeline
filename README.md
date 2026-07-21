@@ -130,12 +130,10 @@ positive — live in [examples/curl-examples.sh](examples/curl-examples.sh).
   sees "[PERSON_1], born [DE_BIRTHDATE_1]" — never the real values
 ```
 
-![The demo's "Masked" tab: the same John Doe letter with every detected value replaced by a numbered placeholder such as [PERSON_1] or [EMAIL_ADDRESS_2], above it the prompt and model fields and the send button.](./assets/demo-2-masked.png)
+![Animated walk through the demo's five tabs on a sample John Doe policy letter: the OCR text, the detected PII highlighted by type, the masked text with numbered placeholders, the LLM's response still full of placeholders, and the re-identified answer with its local mapping table.](./assets/demo-pipeline.gif)
 
-*This is all the provider ever sees. (You can also spot the documented
-over-masking here — a policy number caught as `PERSON`, spans glued across
-line breaks: see [Honest limitations](#honest-limitations). Nothing leaks —
-the masking errs toward hiding too much.)*
+*One document, five states — masked before it leaves, re-identified when it
+returns; the mapping table never leaves the machine.*
 
 PDFs work too — a digital PDF's text layer is extracted directly in the
 browser (skipping OCR entirely), while scanned PDFs are rendered to images
@@ -159,17 +157,13 @@ table local — the round trip sketched [at the top](#why). The demo's legend
 doubles as a minimal masking policy: choose per entity type what the LLM
 may see; unchecked types stay readable in the text.
 
-![The demo's "Re-identified" tab: the model's summary and full text of the John Doe letter with the names, dates and contact details substituted back in, plus the local mapping table listing each placeholder next to its original value.](./assets/demo-3-reidentified.png)
-
-*Re-identified locally — the mapping table never left the machine.*
-
 ## What's in the repo
 
 ```
 document-pii-pipeline/
 ├── docker-compose.yml   ← the two containers, and why the analyzer has no host port
 ├── .env.example         ← optional LLM config; the key stays server-side
-├── assets/              ← the three demo screenshots used in this README
+├── assets/              ← the detected-PII screenshot and the pipeline demo GIF
 ├── caddy/
 │   └── Caddyfile        ← serves the demo, proxies /analyze and /llm on one origin
 ├── presidio/
