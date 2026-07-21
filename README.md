@@ -39,11 +39,10 @@ default that halves recall without ever erroring. Those are
 [the five traps](#the-five-traps) — the reason this repo exists. German
 configs are battle-tested; the structure is language-agnostic.
 
-![The demo's "Detected PII" tab: a policy letter from a fictional "Example Life Insurance Co." to John Doe, with his name, date of birth, address, phone number and email highlighted in colour, and one toggle pill per detected PII type above the text.](./assets/demo-1-detected-pii.png)
+![Animated walk through the demo's five tabs on a sample John Doe policy letter: the OCR text, the detected PII highlighted by type, the masked text with numbered placeholders, the LLM's response still full of placeholders, and the re-identified answer with its local mapping table.](./assets/demo-pipeline.gif)
 
-*The demo on a sample policy letter: every detected value highlighted by
-type. The tabs follow the pipeline — OCR text → detected PII → masked →
-LLM response → re-identified.*
+*One document, five states — the demo walks the pipeline: detect, mask,
+send, re-identify. The mapping table never leaves the machine.*
 
 ## Prerequisites
 
@@ -130,11 +129,6 @@ positive — live in [examples/curl-examples.sh](examples/curl-examples.sh).
   sees "[PERSON_1], born [DE_BIRTHDATE_1]" — never the real values
 ```
 
-![Animated walk through the demo's five tabs on a sample John Doe policy letter: the OCR text, the detected PII highlighted by type, the masked text with numbered placeholders, the LLM's response still full of placeholders, and the re-identified answer with its local mapping table.](./assets/demo-pipeline.gif)
-
-*One document, five states — masked before it leaves, re-identified when it
-returns; the mapping table never leaves the machine.*
-
 PDFs work too — a digital PDF's text layer is extracted directly in the
 browser (skipping OCR entirely), while scanned PDFs are rendered to images
 and go through the same OCR.
@@ -163,7 +157,7 @@ may see; unchecked types stay readable in the text.
 document-pii-pipeline/
 ├── docker-compose.yml   ← the two containers, and why the analyzer has no host port
 ├── .env.example         ← optional LLM config; the key stays server-side
-├── assets/              ← the detected-PII screenshot and the pipeline demo GIF
+├── assets/              ← the pipeline demo GIF
 ├── caddy/
 │   └── Caddyfile        ← serves the demo, proxies /analyze and /llm on one origin
 ├── presidio/
