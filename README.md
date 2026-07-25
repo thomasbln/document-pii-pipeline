@@ -14,11 +14,17 @@ Sending them verbatim to a cloud LLM is off the table in most professional
 contexts; running a capable LLM fully on-premise is out of reach for most
 small teams.
 
+This pipeline wasn't built as a demo. It originated in a document-vault
+product where users upload contracts for AI-assisted analysis — "no PII ever
+reaches the LLM" was a product promise before it was an architecture.
+
 The middle path is an old idea: **encapsulate the sensitive part.** OCR and
 PII detection run locally. Identifying values are swapped for numbered
 placeholders before anything leaves the machine, and swapped back after the
 answer returns. The model reasons about `[PERSON_1]` and never learns who
-that is.
+that is. The architecture behind this — reversible pseudonymization, the
+trust boundary, and why the pipeline fails closed — is described in
+[this article](https://medium.com/@thomasrehmer/how-to-use-llms-on-contracts-without-exposing-pii-d730feaa8a7e).
 
 ```python
 # the whole round trip — the runnable version: examples/llm-roundtrip.sh
@@ -327,6 +333,8 @@ The analyzer image is amd64-only (upstream ships no ARM build):
 
 MIT.
 
-Built by [Thomas Rehmer](https://github.com/thomasbln). If you work with
-legal documents and LLMs, you may also be interested in
+Built by [Thomas Rehmer](https://github.com/thomasbln). The companion article
+[*Privacy by Design for Document AI*](https://medium.com/@thomasrehmer/how-to-use-llms-on-contracts-without-exposing-pii-d730feaa8a7e)
+is the overview to this repo's deep dive. If you work with legal documents and
+LLMs, you may also be interested in
 [Lex Orchestra](https://github.com/thomasbln/Lex-Orchestra).
