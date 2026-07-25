@@ -6,6 +6,8 @@
 > **OCR → PII masking → LLM.** The document stays local, the PII never
 > reaches the model. Works with German and English documents.
 
+📄 **Write-up:** [Privacy by Design for Document AI](https://medium.com/@thomasrehmer/how-to-use-llms-on-contracts-without-exposing-pii-d730feaa8a7e) — the architecture behind this pipeline.
+
 ## Why
 
 Legal and insurance documents are PII by nature — names, addresses, birth
@@ -24,7 +26,7 @@ placeholders before anything leaves the machine, and swapped back after the
 answer returns. The model reasons about `[PERSON_1]` and never learns who
 that is. The architecture behind this — reversible pseudonymization, the
 trust boundary, and why the pipeline fails closed — is described in
-[this article](https://medium.com/@thomasrehmer/how-to-use-llms-on-contracts-without-exposing-pii-d730feaa8a7e).
+[Privacy by Design for Document AI](https://medium.com/@thomasrehmer/how-to-use-llms-on-contracts-without-exposing-pii-d730feaa8a7e).
 
 ```python
 # the whole round trip — the runnable version: examples/llm-roundtrip.sh
